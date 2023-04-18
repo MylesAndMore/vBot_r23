@@ -1,6 +1,36 @@
+/**
+ * Authored by MylesAndMore [04-2023], other open source softwares
+ * Licensed under the GNU GPL V3 license (https://www.gnu.org/licenses/gpl-3.0.en.html).
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+*/
+
 #include <Servo.h>
 #include <Wire.h>
-#include "FastIMU.h"
+
+// Define direction macros
+#define FORWARD 0
+#define BACKWARD 1
+#define LEFT 1
+#define RIGHT 2
+// List of sequential turns for the robot to make in order!
+// This is what you'll need to update on competition day :)
+uint8_t turns[] = { LEFT, RIGHT, LEFT };
+uint8_t turnIndex = 0;
+uint8_t turnTotal = sizeof(turns);
+
+// Configuration values that we can change to change robot's behavior
+// The distance threshold the robot must reach to execute a turn from the list (mesaured in cm)
+#define TURN_THRESHOLD 25
+// The amount of times the ultrasonic sensor is measured per cycle and averaged (due to interference)
+#define ULTRASONIC_AVG 10
 
 // Define IO pins, naming is mostly self-explanatory
 // Drivetrain
@@ -14,18 +44,10 @@
 #define PIN_ECHO 2
 #define PIN_TRIG 10
 #define PIN_SERVO 9
-#define SERVO_OFFSET -9
-// IMU
-#define IMU_ADDR 0x68
-#define IMU_CALIBRATE // comment this line out to skip IMU calibration on startup
+#define SERVO_OFFSET -9 // The value at which to offset the servo's position (telling the servo 90 degrees is usually not perfectly centered)
 
 // Define servo object
 Servo servo;
-// Define MPU6050-related objects and variables
-MPU6050 imu;
-calData calib = { 0 };
-AccelData accelData;
-GyroData gyrData;
 
 /**
  * Sets the direction of the drivetrain, parameters for different directions specified below.
@@ -94,17 +116,24 @@ void drivetrain_setSpeed(uint8_t speedL, uint8_t speedR) {
  * @return the distance in cm
 */
 long ultrasonic_measure() {
-  long echo_distance;
-  digitalWrite(PIN_TRIG,LOW);
-  delayMicroseconds(5);                                                                              
-  digitalWrite(PIN_TRIG,HIGH);
-  delayMicroseconds(15);
-  digitalWrite(PIN_TRIG,LOW);
-  echo_distance=pulseIn(PIN_ECHO,HIGH);
-  echo_distance=echo_distance*0.01657; //how far away is the object in cm
-  //Serial.println((int)echo_distance);
-  return round(echo_distance);
+  // We use a for loop to measure the distance multiple times because the sensor is subject to interference
+  long total_dist = 0;
+  for (uint8_t i = 0; i < ULTRASONIC_AVG; i++) {
+    long echo_dist;
+    digitalWrite(PIN_TRIG,LOW);
+    delayMicroseconds(5);                                                                              
+    digitalWrite(PIN_TRIG,HIGH);
+    delayMicroseconds(15);
+    digitalWrite(PIN_TRIG,LOW);
+    echo_dist=pulseIn(PIN_ECHO,HIGH);
+    echo_dist *= 0.01657;
+    total_dist += round(echo_dist);
+  }
+  // Find the average using the amount of times we ran a measurement and return the final output
+  Serial.println(total_dist / ULTRASONIC_AVG);
+  return (total_dist / ULTRASONIC_AVG);
 }
+
 
 void setup() {
   // Initialize serial port for debugging
@@ -127,26 +156,30 @@ void setup() {
   servo.attach(PIN_SERVO);
   // Set the servo to its centerpoint
   servo.write(90 + SERVO_OFFSET);
-
-  // Set up 400kHZ clock for MPU6050
-  Wire.begin();
-  Wire.setClock(400000);
-  imu.init(calib, IMU_ADDR);
 }
 
-void loop() {
-  imu.update();
-  imu.getAccel(&accelData);
-  Serial.print(accelData.accelX);
-  Serial.print("\t");
-  Serial.print(accelData.accelY);
-  Serial.print("\t");
-  Serial.print(accelData.accelZ);
-  Serial.print("\t");
-  imu.getGyro(&gyrData);
-  Serial.print(gyrData.gyroX);
-  Serial.print("\t");
-  Serial.print(gyrData.gyroY);
-  Serial.print("\t");
-  Serial.print(gyrData.gyroZ);
+void loop() {;
+  if (ultrasonic_measure() < TURN_THRESHOLD) {
+    Serial.println("Wall detected!");
+    // If the measured distance is less than the turn threshold, it's time to execute a turn
+    // drivetrain_setSpeed(175, 175);
+    drivetrain_setDir(FORWARD, turns[turnIndex]);
+    if (turns[turnIndex] == LEFT) {
+      servo.write(135 + SERVO_OFFSET);
+      Serial.println("Turning LEFT");      
+    } else if (turns[turnIndex] == RIGHT) {
+      servo.write(45 + SERVO_OFFSET);
+      Serial.println("Turning RIGHT");
+    } else {
+      // Otherwise, we must have hit the end of our turning list, so stop
+      drivetrain_setSpeed(0, 0);
+      while (true) { }
+    }
+    delay(800);
+    turnIndex++;
+  }
+  // Otherwise, continue straight at full speed
+  drivetrain_setDir(FORWARD, FORWARD);
+  drivetrain_setSpeed(255, 255);
+  servo.write(90 + SERVO_OFFSET);
 }
