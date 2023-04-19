@@ -14,7 +14,7 @@
 
 #include <Servo.h>
 #include <Wire.h>
-#include <FastIMU.h>
+#include "MPU6050_light.h"
 
 // Define direction macros
 #define FORWARD 0
@@ -31,14 +31,17 @@ uint8_t turnIndex = 0;
 #define TURN_THRESHOLD 25
 // The amount of times the ultrasonic sensor is measured per cycle and averaged (due to interference)
 #define ULTRASONIC_AVG 10
+// The amount of time (in ms) to wait after a turn has been performed. This is mainly so that the servo can return back to a zero position and we don't get any false positives.
+// The robot will not move or execute any code during this wait cycle.
+#define WAIT_AFTER_TURN 25
 // THe degree value that the code should attempt to turn to during a turn
 // This should be a little smaller than the actual wanted value to compensate for overshoot because I'm too pressed for time to implement actual PID
-#define TURN_DEG 86
+#define TURN_DEG 85
 #define IMU // comment to disable IMU functionality
 
 // Define IO pins, naming is mostly self-explanatory
 // Drivetrain
-#define PIN_SPEED_R 3 // A4
+#define PIN_SPEED_R 3 // A3
 #define PIN_DIR_R1  12
 #define PIN_DIR_R2  11
 #define PIN_SPEED_L 6 // A6
@@ -52,17 +55,16 @@ uint8_t turnIndex = 0;
 
 // IMU stuff; pins, objects, etc.
 #ifdef IMU
-  #define PIN_SDA 18 // alternate pins A4/D18
-  #define PIN_SCL 19 // alternate pins A5/D19
-  #define IMU_ADDR 0x68
-  #define IMU_CALIBRATE // comment to disable IMU calibration on startup
+  // The value within which to discard IMU values--this is in place due to small fluctuations in the protocol
+  #define IMU_DEADBAND 1
+  #define IMU_CALIBRATE // comment this line to disable IMU calibration on startup
 
-  MPU6050 imu;
-  // Create data storage for IMU
-  calData imu_calData = { 0 };  //Calibration data
-  GyroData imu_gyroData;
-  float turnSetpoint;
-  float currentTurn;
+  #define PIN_SDA 4 // alternate pins A4/D18
+  #define PIN_SCL 5 // alternate pins A5/D19
+  #define IMU_ADDR 0x68
+
+  MPU6050 mpu(Wire);
+  float imu_zeroCalib = 0;
 #endif
 
 // Define servo obect
@@ -154,20 +156,27 @@ float ultrasonic_measure() {
   }
   // Find the average using the amount of times we ran a measurement and return the final output
   float dist = (total_dist / ULTRASONIC_AVG);
-  Serial.print("Measured distance: ");
-  Serial.println(dist);
+  // Serial.print("Measured distance: ");
+  // Serial.println(dist);
   return dist;
 }
 
 /**
- * Refreshes the data from the IMU unit for use in the system.
- * Doesn't return anything because it modifies the memory addresses and variables containing data directly.
+ * @return the current approximated angle of the Z axis (percieved) based on fusion math. 
 */ 
-void imu_refresh() {
-  imu.update();
-  imu.getGyro(&imu_gyroData);
-  // TODO: only update turn within a deadband, which you should add to config
-  currentTurn += imu_gyroData.gyroZ;
+float imu_getZ() {
+  // Fetch the latest computed angles from IMU/fusion algorithm and compensate it for our zero calibration
+  mpu.update();
+  return (mpu.getAngleZ() + imu_zeroCalib);
+}
+
+/**
+ * Zeroes/resets the percieved IMU data.
+*/ 
+void imu_zero() {
+  mpu.update();
+  // Zeroing simply involves getting the inverse of the Z value at the time of calling the function and applying it to all future calculations
+  imu_zeroCalib = -mpu.getAngleZ();
 }
 
 /* --- */
@@ -197,27 +206,13 @@ void setup() {
     // Initialize and optionally calibrate IMU
     Wire.begin();
     Wire.setClock(400000); // 400kHZ is transmission frequency
-    int imuError = imu.init(imu_calData, IMU_ADDR);
+    byte imuError = mpu.begin();
     if (imuError != 0) {
       Serial.print("Error initializing IMU: ");
       Serial.println(imuError);
     }
     #ifdef IMU_CALIBRATE
-      imu.calibrateAccelGyro(&imu_calData);
-      imu.init(imu_calData, IMU_ADDR);
-      Serial.println("Calibration done!");
-      Serial.println("Accel biases X/Y/Z: ");
-      Serial.print(imu_calData.accelBias[0]);
-      Serial.print(", ");
-      Serial.print(imu_calData.accelBias[1]);
-      Serial.print(", ");
-      Serial.println(imu_calData.accelBias[2]);
-      Serial.println("Gyro biases X/Y/Z: ");
-      Serial.print(imu_calData.gyroBias[0]);
-      Serial.print(", ");
-      Serial.print(imu_calData.gyroBias[1]);
-      Serial.print(", ");
-      Serial.println(imu_calData.gyroBias[2]);
+      mpu.calcOffsets();
     #endif // IMU_CALIBRATE
   #endif // IMU
 
@@ -228,50 +223,50 @@ void setup() {
 }
 
 void loop() {
-  #ifdef IMU
-    imu_refresh();
-  #endif
   if (ultrasonic_measure() < TURN_THRESHOLD) {
     Serial.println("Wall detected!");
     // If the measured distance is less than the turn threshold, it's time to execute a turn, get the current turn from the list and...turn
     drivetrain_setDir(FORWARD, turns[turnIndex]);
+    float turnSetpoint;
     if (turns[turnIndex] == LEFT) {
       // Turn the servo in the direction we're turning, mostly for visual confirmation of the turn and doesn't really do anything
       servo.write(135 + SERVO_OFFSET);
       Serial.println("Turning left...");
       // Set our turn setpoint (for later) to the current Z value plus whichever way we are turning
       #ifdef IMU
-        turnSetpoint = currentTurn - TURN_DEG;
+        turnSetpoint = imu_getZ() + TURN_DEG;
       #endif
     } else if (turns[turnIndex] == RIGHT) {
       servo.write(45 + SERVO_OFFSET);
       Serial.println("Turning right...");
       #ifdef IMU
-        turnSetpoint = currentTurn + TURN_DEG;
+        turnSetpoint = imu_getZ() - TURN_DEG;
       #endif
     } else {
       // Otherwise, we must have hit the end of our turning list, so stop
       Serial.println("Stopping...");
       drivetrain_setSpeed(0, 0);
       // Infinite loop to stop execution of the main program loop
-      while (true) { }
+      while (true);
     }
     #ifdef IMU
-      // Just refresh IMU data until we meet the turn setpoint, then we can proceed (and stop the turn)
-      // TODO: use a new variable that resets after every turn
-      while (currentTurn < turnSetpoint) {
-        imu.getGyro(&imu_gyroData);
-      }
+      // Wait (aka continue turning) until we meet the turn setpoint, only until after we can proceed (and stop the turn)
+      // We use absolute value here so it works for both left and right turns
+      while (abs(imu_getZ()) < abs(turnSetpoint));
     #else
-      // No IMU enabled, just use a random delay that should maybe probably possibly get us to 90
-      delay(800);
+      // No IMU enabled, just use a random delay that should maybe probably possibly get us to 90, this is the absolute failsafe
+      delay(700);
     #endif
     // Increment the index so we execute the next turn next time
     turnIndex++;
     // Turn the servo to face forwards again so we can detect the next obstacle
     servo.write(90 + SERVO_OFFSET);
+    drivetrain_setSpeed(0, 0);
+    Serial.println("Turn complete.");
     // Small delay for the servo to turn back and prevent possible false detections
-    delay(50);
+    delay(WAIT_AFTER_TURN);
+    // Zero the IMU to prepare for the next turn
+    imu_zero();
   }
   // Otherwise, continue straight at full speed
   drivetrain_setDir(FORWARD, FORWARD);
