@@ -38,10 +38,10 @@ uint8_t turnIndex = 0;
 
 // Define IO pins, naming is mostly self-explanatory
 // Drivetrain
-#define PIN_SPEED_R A3
+#define PIN_SPEED_R 3 // A4
 #define PIN_DIR_R1  12
 #define PIN_DIR_R2  11
-#define PIN_SPEED_L A6
+#define PIN_SPEED_L 6 // A6
 #define PIN_DIR_L1  7
 #define PIN_DIR_L2  8
 // Ultrasonic sensor / servo
@@ -52,8 +52,8 @@ uint8_t turnIndex = 0;
 
 // IMU stuff; pins, objects, etc.
 #ifdef IMU
-  #define PIN_SDA A4 // alternate pin D18
-  #define PIN_SCL A5 // alternate pin D19
+  #define PIN_SDA 18 // alternate pins A4/D18
+  #define PIN_SCL 19 // alternate pins A5/D19
   #define IMU_ADDR 0x68
   #define IMU_CALIBRATE // comment to disable IMU calibration on startup
 
@@ -62,6 +62,7 @@ uint8_t turnIndex = 0;
   calData imu_calData = { 0 };  //Calibration data
   GyroData imu_gyroData;
   float turnSetpoint;
+  float currentTurn;
 #endif
 
 // Define servo obect
@@ -146,7 +147,7 @@ float ultrasonic_measure() {
     delayMicroseconds(15);
     digitalWrite(PIN_TRIG, LOW);
     // Get the length of the sound pulse and convert it to cm
-    echo_dist = pulseIn(PIN_ECHO,HIGH);
+    echo_dist = pulseIn(PIN_ECHO, HIGH);
     echo_dist *= 0.01657;
     // Add the recorded distance to the tottal that we will later average
     total_dist += round(echo_dist);
@@ -158,7 +159,18 @@ float ultrasonic_measure() {
   return dist;
 }
 
-// ---
+/**
+ * Refreshes the data from the IMU unit for use in the system.
+ * Doesn't return anything because it modifies the memory addresses and variables containing data directly.
+*/ 
+void imu_refresh() {
+  imu.update();
+  imu.getGyro(&imu_gyroData);
+  // TODO: only update turn within a deadband, which you should add to config
+  currentTurn += imu_gyroData.gyroZ;
+}
+
+/* --- */
 
 void setup() {
   // Initialize serial port for debugging
@@ -185,14 +197,27 @@ void setup() {
     // Initialize and optionally calibrate IMU
     Wire.begin();
     Wire.setClock(400000); // 400kHZ is transmission frequency
-    int imuError = imu.init(calib, IMU_ADDR);
+    int imuError = imu.init(imu_calData, IMU_ADDR);
     if (imuError != 0) {
       Serial.print("Error initializing IMU: ");
       Serial.println(imuError);
     }
     #ifdef IMU_CALIBRATE
-      imu.calibrateAccelGyro(&calib);
-      imu.init(calib, IMU_ADDR);
+      imu.calibrateAccelGyro(&imu_calData);
+      imu.init(imu_calData, IMU_ADDR);
+      Serial.println("Calibration done!");
+      Serial.println("Accel biases X/Y/Z: ");
+      Serial.print(imu_calData.accelBias[0]);
+      Serial.print(", ");
+      Serial.print(imu_calData.accelBias[1]);
+      Serial.print(", ");
+      Serial.println(imu_calData.accelBias[2]);
+      Serial.println("Gyro biases X/Y/Z: ");
+      Serial.print(imu_calData.gyroBias[0]);
+      Serial.print(", ");
+      Serial.print(imu_calData.gyroBias[1]);
+      Serial.print(", ");
+      Serial.println(imu_calData.gyroBias[2]);
     #endif // IMU_CALIBRATE
   #endif // IMU
 
@@ -204,8 +229,7 @@ void setup() {
 
 void loop() {
   #ifdef IMU
-    // Refresh IMU data
-    imu.getGyro(&imu_gyroData);
+    imu_refresh();
   #endif
   if (ultrasonic_measure() < TURN_THRESHOLD) {
     Serial.println("Wall detected!");
@@ -216,11 +240,15 @@ void loop() {
       servo.write(135 + SERVO_OFFSET);
       Serial.println("Turning left...");
       // Set our turn setpoint (for later) to the current Z value plus whichever way we are turning
-      turnSetpoint = imu_gyroData.gyroZ - TURN_DEG;
+      #ifdef IMU
+        turnSetpoint = currentTurn - TURN_DEG;
+      #endif
     } else if (turns[turnIndex] == RIGHT) {
       servo.write(45 + SERVO_OFFSET);
       Serial.println("Turning right...");
-      turnSetpoint = imu_gyroData.gyroZ + TURN_DEG;
+      #ifdef IMU
+        turnSetpoint = currentTurn + TURN_DEG;
+      #endif
     } else {
       // Otherwise, we must have hit the end of our turning list, so stop
       Serial.println("Stopping...");
@@ -229,10 +257,11 @@ void loop() {
       while (true) { }
     }
     #ifdef IMU
-      // // Just refresh IMU data until we meet the turn setpoint, then we can proceed (and stop the turn)
-      // while (imu_gyroData.gyroZ < turnSetpoint) {
-      //   imu.getGyro(&imu_gyroData);
-      // }
+      // Just refresh IMU data until we meet the turn setpoint, then we can proceed (and stop the turn)
+      // TODO: use a new variable that resets after every turn
+      while (currentTurn < turnSetpoint) {
+        imu.getGyro(&imu_gyroData);
+      }
     #else
       // No IMU enabled, just use a random delay that should maybe probably possibly get us to 90
       delay(800);
