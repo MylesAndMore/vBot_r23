@@ -41,6 +41,7 @@ uint8_t turnIndex = 0;
 // This should be a little smaller than the actual wanted value to compensate for overshoot because I'm too pressed for time to implement actual PID
 #define TURN_DEG 85
 #define IMU // comment to disable IMU functionality
+#define DATA_LOGGING // uncomment to enable data logging functionality (for practice log), should be commented for competition
 
 // Define IO pins, naming is mostly self-explanatory
 // Drivetrain
@@ -53,6 +54,8 @@ uint8_t turnIndex = 0;
 // Ultrasonic sensor / servo
 #define PIN_ECHO 2
 #define PIN_TRIG 10
+float dist;
+
 #define PIN_SERVO 9
 #define SERVO_OFFSET -9 // The value at which to offset the servo's position (telling the servo 90 degrees is usually not perfectly centered)
 
@@ -182,6 +185,40 @@ void imu_zero() {
   imu_zeroCalib = -mpu.getAngleZ();
 }
 
+#ifdef DATA_LOGGING
+  /**
+   * Prepares for data logging. This is when the stopwatch is started.
+  */ 
+  void logInit() {
+    float log_currentDist[];
+    float log_overTime[];
+    float log_startTime = millis();
+  }
+
+  /**
+   * Logs reccuring data for the robot's practice log.
+   * @param log_dist the current distance value from the ultrasonic sensor to log.
+  */ 
+  void logData(float log_dist) {
+    log_currentDist.push_back(log_dist);
+    log_overTime.push_back((millis() - log_startTime) / 1000);
+  }
+
+  /**
+   * Outputs the log to serial.
+  */ 
+  void logOutput() {
+    // Iterate through all values of distance and time and print them to serial
+    for (uint i = 0; i <= overTime.size(); i++) {
+      Serial.print(TURN_THRESHOLD);
+      Serial.print("\t");
+      Serial.print(currentDist[i]);
+      Serial.print("\t");
+      Serial.println(overTime[i]);
+    }
+  }
+#endif
+
 /* --- */
 
 void setup() {
@@ -223,10 +260,19 @@ void setup() {
   servo.attach(PIN_SERVO);
   // Set the servo to its centerpoint so we're looking ahead to detect obstacles
   servo.write(90 + SERVO_OFFSET);
+  
+  #ifdef DATA_LOGGING
+    // If data logging is enabled, initialize it now
+    logInit();
+  #endif
 }
 
 void loop() {
-  if (ultrasonic_measure() < TURN_THRESHOLD) {
+  dist = ultrasonic_measure();
+  #ifdef DATA_LOGGING
+    logData(dist);
+  #endif
+  if (dist < TURN_THRESHOLD) {
     Serial.println("Wall detected!");
     // If the measured distance is less than the turn threshold, it's time to execute a turn, get the current turn from the list and...turn
     drivetrain_setDir(FORWARD, turns[turnIndex]);
@@ -269,6 +315,11 @@ void loop() {
       delay(FINAL_DRIVE_MS);
       Serial.println("Stopping...");
       drivetrain_setSpeed(0, 0);
+      #ifdef DATA_LOGGING
+        // If data logging is enabled, stop logging and wait a bit before printing data to serial
+        delay(30000);
+        logoutput();
+      #endif
       // Infinite loop to stop execution of the main program loop and hold the robot
       while (true);
     }
