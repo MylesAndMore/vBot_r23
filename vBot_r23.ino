@@ -212,9 +212,9 @@ void imu_zero() {
     for (uint i = 0; i <= overTime.size(); i++) {
       Serial.print(TURN_THRESHOLD);
       Serial.print("\t");
-      Serial.print(currentDist[i]);
+      Serial.print(log_currentDist[i]);
       Serial.print("\t");
-      Serial.println(overTime[i]);
+      Serial.println(log_overTime[i]);
     }
   }
 #endif
