@@ -24,6 +24,7 @@
 // List of sequential turns for the robot to make in order!
 // This is what you'll need to update on competition day :)
 uint8_t turns[] = { LEFT, RIGHT, LEFT };
+uint8_t turnsAmount = turns.size()--;
 uint8_t turnIndex = 0;
 
 // Configuration values that we can change to change robot's behavior
@@ -33,7 +34,9 @@ uint8_t turnIndex = 0;
 #define ULTRASONIC_AVG 10
 // The amount of time (in ms) to wait after a turn has been performed. This is mainly so that the servo can return back to a zero position and we don't get any false positives.
 // The robot will not move or execute any code during this wait cycle.
-#define WAIT_AFTER_TURN 25
+#define WAIT_AFTER_TURN_MS 50
+// The amount of time (in ms) to drive after the final turn has been made
+#define FINAL_DRIVE_MS 1000
 // THe degree value that the code should attempt to turn to during a turn
 // This should be a little smaller than the actual wanted value to compensate for overshoot because I'm too pressed for time to implement actual PID
 #define TURN_DEG 85
@@ -156,8 +159,8 @@ float ultrasonic_measure() {
   }
   // Find the average using the amount of times we ran a measurement and return the final output
   float dist = (total_dist / ULTRASONIC_AVG);
-  // Serial.print("Measured distance: ");
-  // Serial.println(dist);
+  Serial.print("Measured distance: ");
+  Serial.println(dist);
   return dist;
 }
 
@@ -242,12 +245,6 @@ void loop() {
       #ifdef IMU
         turnSetpoint = imu_getZ() - TURN_DEG;
       #endif
-    } else {
-      // Otherwise, we must have hit the end of our turning list, so stop
-      Serial.println("Stopping...");
-      drivetrain_setSpeed(0, 0);
-      // Infinite loop to stop execution of the main program loop
-      while (true);
     }
     #ifdef IMU
       // Wait (aka continue turning) until we meet the turn setpoint, only until after we can proceed (and stop the turn)
@@ -264,9 +261,17 @@ void loop() {
     drivetrain_setSpeed(0, 0);
     Serial.println("Turn complete.");
     // Small delay for the servo to turn back and prevent possible false detections
-    delay(WAIT_AFTER_TURN);
+    delay(WAIT_AFTER_TURN_MS);
     // Zero the IMU to prepare for the next turn
     imu_zero();
+    // Check to see if that was our last turn, if so, stop after the preprogrammed delay
+    if (turnIndex >= turnsAmount) {
+      delay(FINAL_DRIVE_MS);
+      Serial.println("Stopping...");
+      drivetrain_setSpeed(0, 0);
+      // Infinite loop to stop execution of the main program loop and hold the robot
+      while (true);
+    }
   }
   // Otherwise, continue straight at full speed
   drivetrain_setDir(FORWARD, FORWARD);
