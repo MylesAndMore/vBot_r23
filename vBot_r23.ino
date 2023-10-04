@@ -1,5 +1,5 @@
 /**
- * Contributed by MylesAndMore and other open source softwares, 04-2023
+ * Contributed by MylesAndMore and other open source software authors, 10.2023
  * Licensed under the GNU GPL V3 license (https://www.gnu.org/licenses/gpl-3.0.en.html).
  *
  * This program is free software: you can redistribute it and/or modify
@@ -16,50 +16,31 @@
 #include <Wire.h>
 #include "MPU6050_light.h"
 
-// Define direction macros
-#define FORWARD 0
-#define BACKWARD 1
-#define LEFT 1
-#define RIGHT 2
-// List of sequential turns for the robot to make in order!
-// This is what you'll need to update on competition day :)
+typedef enum {
+  FORWARD,
+  BACKWARD,
+  LEFT,
+  RIGHT
+} Direction;
+
+// List of sequential turns for the robot to make, in order
 uint8_t turns[] = { LEFT, RIGHT, RIGHT, LEFT, RIGHT };
-uint8_t turnsAmount = sizeof(turns) / sizeof(turns[0]);
+// Distance to go on the straight portion between each turn, in cm
+#define STRAIGHT_DIST 100
+
+#define NUM_TURNS sizeof(turns) / sizeof(turns[0])
 uint8_t turnIndex = 0;
 
-// Configuration values that we can change to change robot's behavior
-// The distance threshold the robot must reach to execute a turn from the list (mesaured in mm)
-#define TURN_THRESHOLD 25
-// The amount of times the ultrasonic sensor is measured per cycle and averaged (due to interference)
-#define ULTRASONIC_AVG 10
-// The amount of time (in ms) to wait after a turn has been performed. This is mainly so that the servo can return back to a zero position and we don't get any false positives.
-// The robot will not move or execute any code during this wait cycle.
-#define WAIT_AFTER_TURN_MS 75
+// The amount of time (in ms) to wait after a turn has been performed, Tte robot will not move or execute any code during this wait cycle.
+#define WAIT_AFTER_TURN_MS 10
 // The speed to complete turns at (value between 150-255)
 // Be careful! This value correlates to the TURN_DEG found below
 #define TURN_SPEED 180
-// The amount of time (in ms) to drive after the final turn has been made
-#define FINAL_DRIVE_MS 800
-// THe degree value that the code should attempt to turn to during a turn
+// The degree value that the code should attempt to turn to during a turn
 // This should be a little smaller than the actual wanted value to compensate for overshoot because I'm too pressed for time to implement actual PID
+// TODO: pid lol
 #define TURN_DEG 67
 #define IMU // comment to disable IMU functionality
-
-// Define IO pins, naming is mostly self-explanatory
-// Drivetrain
-#define PIN_SPEED_R 3 // A3
-#define PIN_DIR_R1  12
-#define PIN_DIR_R2  11
-#define PIN_SPEED_L 6 // A6
-#define PIN_DIR_L1  7
-#define PIN_DIR_L2  8
-// Ultrasonic sensor / servo
-#define PIN_ECHO 2
-#define PIN_TRIG 10
-float dist;
-
-#define PIN_SERVO 9
-#define SERVO_OFFSET -9 // The value at which to offset the servo's position (telling the servo 90 degrees is usually not perfectly centered)
 
 // IMU stuff; pins, objects, etc.
 #ifdef IMU
@@ -70,63 +51,52 @@ float dist;
   #define PIN_SDA 4 // alternate pins A4/D18
   #define PIN_SCL 5 // alternate pins A5/D19
   #define IMU_ADDR 0x68
+  #define IMU_FREQ_KHZ 400
 
   MPU6050 mpu(Wire);
   float imu_zeroCalib = 0;
 #endif
 
-// Define servo obect
-Servo servo;
+// Pin defs
+// Drivetrain
+#define PIN_SPEED_R 3 // A3
+#define PIN_DIR_R1  12
+#define PIN_DIR_R2  11
+#define PIN_SPEED_L 6 // A6
+#define PIN_DIR_L1  7
+#define PIN_DIR_L2  8
 
 
 /**
- * Sets the direction of the drivetrain, parameters for different directions specified below.
- * @param dir 0 for forwards, 1 for backwards
- * @param turn 0 for no turn, 1 for left turn, 2 for right turn
+ * Sets the direction of the drivetrain.
+ * @param dir direction to follow
 */
-void drivetrain_setDir(uint8_t dir, uint8_t turn) {
-  // Logic to figure out what we need to set motors to, then, well...set the motors
-  if (dir == 0) {
-    if (turn == 0) {
-      // Forward
+void drivetrain_setDir(Direction dir) {
+  switch (dir) {
+    case FORWARD:
       digitalWrite(PIN_DIR_R1, HIGH);
       digitalWrite(PIN_DIR_R2, LOW);
       digitalWrite(PIN_DIR_L1, HIGH);
       digitalWrite(PIN_DIR_L2, LOW);
-    } else if (turn == 1) {
-      // Forward left turn
-      // TODO: experiment with changing speeds to try and speed up turns?
+      break;
+    case BACKWARD:
+      digitalWrite(PIN_DIR_R1, LOW);
+      digitalWrite(PIN_DIR_R2, HIGH);
+      digitalWrite(PIN_DIR_L1, LOW);
+      digitalWrite(PIN_DIR_L2, HIGH);
+      break;
+    case LEFT:
       digitalWrite(PIN_DIR_R1, HIGH);
       digitalWrite(PIN_DIR_R2, LOW);
       digitalWrite(PIN_DIR_L1, LOW);
       digitalWrite(PIN_DIR_L2, HIGH);
-    } else if (turn == 2) {
-      // Forward right turn
+      break;
+    case RIGHT:
       digitalWrite(PIN_DIR_R1, LOW);
       digitalWrite(PIN_DIR_R2, HIGH);
       digitalWrite(PIN_DIR_L1, HIGH);
       digitalWrite(PIN_DIR_L2, LOW);
-    }
-  } else if (dir == 1) {
-    if (turn == 0) {
-      // Backward
-      digitalWrite(PIN_DIR_R1, LOW);
-      digitalWrite(PIN_DIR_R2, HIGH);
-      digitalWrite(PIN_DIR_L1, LOW);
-      digitalWrite(PIN_DIR_L2, HIGH);
-    } else if (turn == 1) {
-      // Backward left turn
-      digitalWrite(PIN_DIR_R1, LOW);
-      digitalWrite(PIN_DIR_R2, HIGH);
-      digitalWrite(PIN_DIR_L1, HIGH);
-      digitalWrite(PIN_DIR_L2, LOW);
-    } else if (turn == 2) {
-      // Backward right turn
-      digitalWrite(PIN_DIR_R1, HIGH);
-      digitalWrite(PIN_DIR_R2, LOW);
-      digitalWrite(PIN_DIR_L1, LOW);
-      digitalWrite(PIN_DIR_L2, HIGH);
-    }
+      break;
   }
 }
 
@@ -139,34 +109,6 @@ void drivetrain_setDir(uint8_t dir, uint8_t turn) {
 void drivetrain_setSpeed(uint8_t speedL, uint8_t speedR) {
   analogWrite(PIN_SPEED_L, speedL); 
   analogWrite(PIN_SPEED_R, speedR); 
-}
-
-/**
- * Measures the distance from the object currently in front of the ultrasonic sensor.
- * @return the distance in mm
-*/
-float ultrasonic_measure() {
-  float total_dist = 0;
-  // We use a for loop to measure the distance multiple times and take an average, because the sound waves are subject to interference
-  for (uint8_t i = 0; i < ULTRASONIC_AVG; i++) {
-    float echo_dist;
-    // Sequence to send out a sound pulse
-    digitalWrite(PIN_TRIG, LOW);
-    delayMicroseconds(5);                                                                              
-    digitalWrite(PIN_TRIG, HIGH);
-    delayMicroseconds(15);
-    digitalWrite(PIN_TRIG, LOW);
-    // Get the length of the sound pulse and convert it to mm
-    echo_dist = pulseIn(PIN_ECHO, HIGH);
-    echo_dist *= 0.01657;
-    // Add the recorded distance to the tottal that we will later average
-    total_dist += round(echo_dist);
-  }
-  // Find the average using the amount of times we ran a measurement and return the final output
-  float dist = (total_dist / ULTRASONIC_AVG);
-  Serial.print("Measured distance: ");
-  Serial.println(dist);
-  return dist;
 }
 
 /**
@@ -201,9 +143,6 @@ void setup() {
   pinMode(PIN_DIR_L1, OUTPUT);
   pinMode(PIN_DIR_L2, OUTPUT);
   pinMode(PIN_SPEED_R, OUTPUT); 
-  // Ultrasonic
-  pinMode(PIN_TRIG, OUTPUT); 
-  pinMode(PIN_ECHO, INPUT);
   // IMU
   #ifdef IMU
     pinMode(PIN_SDA, INPUT);
@@ -213,7 +152,7 @@ void setup() {
   
     // Initialize and optionally calibrate IMU
     Wire.begin();
-    Wire.setClock(400000); // 400kHZ is transmission frequency
+    Wire.setClock(IMU_FREQ_KHZ * 1000); // 400kHZ is transmission frequency
     byte imuError = mpu.begin();
     if (imuError != 0) {
       Serial.print("Error initializing IMU: ");
@@ -223,30 +162,23 @@ void setup() {
       mpu.calcOffsets();
     #endif // IMU_CALIBRATE
   #endif // IMU
-
-  // Tell servo object what pin the servo is on
-  servo.attach(PIN_SERVO);
-  // Set the servo to its centerpoint so we're looking ahead to detect obstacles
-  servo.write(90 + SERVO_OFFSET);
 }
 
 void loop() {
-  if (ultrasonic_measure() < TURN_THRESHOLD) {
+  // TODO: turn condition based on distance traveled
+  if (false) {
     Serial.println("Wall detected!");
     // If the measured distance is less than the turn threshold, it's time to execute a turn, get the current turn from the list and...turn
     drivetrain_setSpeed(TURN_SPEED, TURN_SPEED);
-    drivetrain_setDir(FORWARD, turns[turnIndex]);
+    drivetrain_setDir(turns[turnIndex]);
     float turnSetpoint;
     if (turns[turnIndex] == LEFT) {
-      // Turn the servo in the direction we're turning, mostly for visual confirmation of the turn and doesn't really do anything
-      servo.write(135 + SERVO_OFFSET);
       Serial.println("Turning left...");
       // Set our turn setpoint (for later) to the current Z value plus whichever way we are turning
       #ifdef IMU
         turnSetpoint = imu_getZ() + TURN_DEG;
       #endif
     } else if (turns[turnIndex] == RIGHT) {
-      servo.write(45 + SERVO_OFFSET);
       Serial.println("Turning right...");
       #ifdef IMU
         turnSetpoint = imu_getZ() - TURN_DEG;
@@ -262,8 +194,6 @@ void loop() {
     #endif
     // Increment the index so we execute the next turn next time
     turnIndex++;
-    // Turn the servo to face forwards again so we can detect the next obstacle
-    servo.write(90 + SERVO_OFFSET);
     drivetrain_setSpeed(0, 0);
     Serial.println("Turn complete.");
     // Small delay for the servo to turn back and prevent possible false detections
@@ -271,10 +201,10 @@ void loop() {
     // Zero the IMU to prepare for the next turn
     imu_zero();
     // Check to see if that was our last turn, if so, stop after the preprogrammed delay
-    if (turnIndex >= turnsAmount) {
-      drivetrain_setDir(FORWARD, FORWARD);
+    if (turnIndex >= NUM_TURNS) {
+      drivetrain_setDir(FORWARD);
       drivetrain_setSpeed(255, 255);
-      delay(FINAL_DRIVE_MS);
+      // FIXME: once encoders are working, implement the encoder logic here as well
       Serial.println("Stopping...");
       drivetrain_setSpeed(0, 0);
       // Infinite loop to stop execution of the main program loop and hold the robot
@@ -282,6 +212,6 @@ void loop() {
     }
   }
   // Otherwise, continue straight at full speed
-  drivetrain_setDir(FORWARD, FORWARD);
+  drivetrain_setDir(FORWARD);
   drivetrain_setSpeed(255, 255);
 }
